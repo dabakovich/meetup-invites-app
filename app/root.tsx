@@ -29,7 +29,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
         <meta charSet="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <meta name="theme-color" content="#f6f7fc" />
-        <meta name="referrer" content="no-referrer" />
+        
         <meta
           name="description"
           content="Тусовка — українська афіша подій. Знаходь зустрічі та запрошуй своїх."

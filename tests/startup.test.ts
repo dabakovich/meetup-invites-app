@@ -9,7 +9,7 @@ import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { test } from "node:test";
 
-test("the production entry point renders HTML and accepts a same-origin form behind a local TLS proxy", async t => {
+test("the production entry point renders HTML and accepts a same-origin form behind a TLS-terminating proxy", async t => {
   const directory = await mkdtemp(join(tmpdir(), "tusovka-production-"));
   const site = "https://gatherings.example.test";
   const child = spawn(process.execPath, ["scripts/serve.mjs"], {
@@ -44,14 +44,17 @@ test("the production entry point renders HTML and accepts a same-origin form beh
   assert.equal(page.headers.get("Cache-Control"), "private, no-store");
   const html = await page.text();
   assert.match(html, /Найближчі події/);
+  assert.equal(page.headers.get("Referrer-Policy"), "same-origin");
+  const invite = await fetch(local + "/invite/invalid");
+  assert.equal(invite.headers.get("Referrer-Policy"), "no-referrer");
   const stylesheet = /href="(\/assets\/[^"]+\.css)"/.exec(html);
   assert.ok(stylesheet);
   const asset = await fetch(local + stylesheet[1], { method: "HEAD" });
   assert.equal(asset.status, 200);
   assert.match(asset.headers.get("Cache-Control") || "", /immutable/);
-  // node:http preserves the Host header supplied by a reverse proxy.
+  // The proxy forwards to an internal HTTP host while the browser submits from the public HTTPS origin.
   const registration = request(local + "/auth", {
-    method: "POST", headers: { ...headers, Origin: site, "Content-Type": "application/x-www-form-urlencoded" },
+    method: "POST", headers: { Host: "internal.service:10000", Origin: site, "Content-Type": "application/x-www-form-urlencoded" },
   });
   const response = once(registration, "response");
   registration.end(new URLSearchParams({
@@ -63,4 +66,13 @@ test("the production entry point renders HTML and accepts a same-origin form beh
   assert.equal(result.statusCode, 303);
   assert.equal(result.headers.location, "/profile");
   assert.match(result.headers["set-cookie"].join(" "), /; Secure/i);
+
+  // Hydrated React Router forms submit to the data endpoint.
+  const signin = await fetch(local + "/auth.data", {
+    method: "POST",
+    headers: { Origin: site },
+    body: new URLSearchParams({ email: "guest@example.test", password: "temporary-test-password", next: "/" }),
+  });
+  assert.ok(signin.headers.getSetCookie().some(cookie => /; Secure/i.test(cookie)));
+  await signin.arrayBuffer();
 });

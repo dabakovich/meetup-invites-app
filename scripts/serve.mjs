@@ -1,14 +1,16 @@
 process.env.NODE_ENV = "production";
 const { default: express } = await import("express");
 const { createRequestHandler } = await import("@react-router/express");
-const build = await import("../build/server/index.js");
+const serverBuild = await import("../build/server/index.js");
+// TLS can terminate before Express sees the request. The form action also checks the exact public origin.
+const build = { ...serverBuild, allowedActionOrigins: [new URL(process.env.BETTER_AUTH_URL).host] };
 const app = express();
 app.disable("x-powered-by");
 app.set("trust proxy", "loopback");
 app.use((request, response, next) => {
   request.headers["x-tusovka-client-address"] = request.ip || request.socket.remoteAddress;
   response.set({
-    "Referrer-Policy": "no-referrer",
+    "Referrer-Policy": request.path.startsWith("/invite/") ? "no-referrer" : "same-origin",
     "X-Content-Type-Options": "nosniff",
     "Content-Security-Policy": "frame-ancestors 'none'; object-src 'none'; base-uri 'self'",
   });
