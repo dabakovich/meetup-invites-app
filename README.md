@@ -41,8 +41,10 @@ Open [localhost:3000](http://localhost:3000). Keep the same secret across restar
 | `BETTER_AUTH_URL` | Public origin. Required for production. Development defaults to `http://localhost:5173`. |
 | `BETTER_AUTH_SECRET` | Secret of at least 32 characters. Required for production. Development generates and persists a local secret in SQLite. |
 | `DATABASE_PATH` | SQLite file, default `data/tusovka.sqlite`. Use a persistent local disk. |
+| `PRIVACY_CONTROLLER`, `PRIVACY_CONTACT` | Set the actual data controller name and contact for the registration privacy notice. |
 | `PORT`, `HOST` | Production listener, default `127.0.0.1:3000`. |
 | `SEED_CATALOG` | Set to `0` to skip the optional starter catalog. Production starts without seeding. |
+| `PRIVACY_CONTROLLER`, `PRIVACY_CONTACT` | The actual data controller's name and contact information, displayed in the registration privacy notice. Set both for a public deployment. |
 
 Run one Node instance behind a TLS-terminating reverse proxy on the same host. Preserve the public Host header and have the proxy overwrite X-Forwarded-For, X-Forwarded-Host and X-Forwarded-Proto with values derived from the connection. Omit invite URLs from access logs. HTTPS enables Secure cookies. The application uses HttpOnly session cookies, same-origin mutation checks, seven-day sessions, persistent per-client and per-email sign-in throttling, and per-account comment limits.
 

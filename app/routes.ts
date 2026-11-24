@@ -4,6 +4,7 @@ export default [
   index("routes/discover.tsx"),
   route("auth", "routes/auth.tsx"),
   route("logout", "routes/logout.ts"),
+  route("rules", "routes/rules.tsx"),
   route("profile", "routes/profile.tsx"),
   route("events/new", "routes/editor.tsx", { id: "event-new" }),
   route("events/:id/edit", "routes/editor.tsx", { id: "event-edit" }),

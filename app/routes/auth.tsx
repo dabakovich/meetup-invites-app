@@ -32,7 +32,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     }
     return redirect(next);
   }
-  return { next, signup: url.searchParams.get("mode") === "signup" };
+  return { next, signup: url.searchParams.get("mode") === "signup", privacyController: process.env.PRIVACY_CONTROLLER || "", privacyContact: process.env.PRIVACY_CONTACT || "" };
 }
 export async function action({ request }: ActionFunctionArgs) {
   const form = await readForm(request);
@@ -75,7 +75,7 @@ export async function action({ request }: ActionFunctionArgs) {
   return redirect(typeof pending === "string" && pending ? "/auth" : next, { headers, status: 303 });
 }
 export default function Auth() {
-  const { signup, next } = useLoaderData<typeof loader>();
+  const { signup, next, privacyController, privacyContact } = useLoaderData<typeof loader>();
   const result = useActionData<typeof action>();
   const busy = useNavigation().state === "submitting";
   const alternate = "/auth?next=" + encodeURIComponent(next) + (signup ? "" : "&mode=signup");
@@ -148,6 +148,15 @@ export default function Auth() {
               />
             </span>
           </label>
+          {signup && (
+            <details>
+              <summary>Як ми обробляємо персональні дані</summary>
+              <p>Ім’я та електронну адресу використовуємо для створення акаунта, входу, участі у подіях і відображення вашого імені іншим учасникам. Пароль зберігається у вигляді хешу. Дані обробляються сервісом та постачальниками його хостингу.</p>
+              <p>Ви можете змінити ім’я або видалити акаунт у профілі. При видаленні також видаляються ваші події, бронювання та сеанси; коментарі в інших подіях залишаються без прив’язки до акаунта.</p>
+              {privacyController && <p>Володілець даних: {privacyController}.</p>}
+              {privacyContact && <p>Питання щодо персональних даних: {privacyContact}.</p>}
+            </details>
+          )}
           {result?.error && (
             <p className="form-error" role="alert">
               {result.error}

@@ -1,8 +1,9 @@
 import { randomUUID, randomBytes } from "node:crypto";
 import sharp from "sharp";
-import { categories, parseKyivDate, type Gathering, type EventSummary, type EventFields } from "../model.ts";
+import { categories, parseKyivDate, latestEventDate, dateInput, type Gathering, type EventSummary, type EventFields } from "../model.ts";
 import type { Actor } from "./auth.server.ts";
 import { db } from "./db.server.ts";
+import { idempotencyKey, previousResult, saveResult } from "./idempotency.server.ts";
 
 export const unavailable = () => new Response("Подія недоступна.", { status: 404 });
 const summaryColumns = "e.id, e.title, e.starts_at, e.category, e.location";
@@ -98,9 +99,12 @@ export function details(id: string, who: Actor | null, requested: string | null)
         commentPage: { page, count, total },
         comments: db()
           .prepare(
-            "SELECT c.id, u.name, c.body, c.created_at FROM comments c JOIN user u ON u.id = c.user_id WHERE event_id = ? ORDER BY c.id DESC LIMIT ? OFFSET ?",
+            "SELECT c.id, COALESCE(u.name, 'Видалений користувач') AS name, c.body, c.created_at, c.user_id = ? AS own, (SELECT COUNT(*) FROM comment_reports r WHERE r.comment_id = c.id) AS reports FROM comments c LEFT JOIN user u ON u.id = c.user_id WHERE c.event_id = ? ORDER BY c.id DESC LIMIT ? OFFSET ?",
           )
-          .all(id, size, offset) as { id: number; name: string; body: string; created_at: number }[],
+          .all(who?.id ?? null, id, size, offset) as { id: number; name: string; body: string; created_at: number; own: number; reports: number }[],
+        reportedComments: host
+          ? db().prepare("SELECT c.id, c.body, COUNT(r.reporter_id) AS reports FROM comments c JOIN comment_reports r ON r.comment_id = c.id WHERE c.event_id = ? GROUP BY c.id ORDER BY MAX(r.created_at) DESC, c.id DESC LIMIT 50").all(id) as { id: number; body: string; reports: number }[]
+          : [],
         guests: host
           ? (db()
               .prepare(
@@ -152,7 +156,7 @@ export function rotateInvite(id: string, who: Actor) {
     .immediate();
 }
 export class ValidationError extends Error {}
-export function fields(form: FormData): EventFields {
+export function fields(form: FormData, existingStartsAt?: number, now = Date.now()): EventFields {
   const val = (key: string) => String(form.get(key) ?? "").trim();
   const title = val("title"),
     description = val("description"),
@@ -163,8 +167,11 @@ export function fields(form: FormData): EventFields {
     visibility = val("visibility");
   if (!title || title.length > 120 || !description || description.length > 5000 || location.length > 180)
     throw new ValidationError("Перевірте назву, опис і місце проведення.");
-  if (!Number.isFinite(starts_at) || starts_at <= Date.now())
+  if (!Number.isFinite(starts_at) || starts_at <= now)
     throw new ValidationError("Оберіть майбутню дату й час за Києвом.");
+  if (val("starts_at") > latestEventDate(now) &&
+      (existingStartsAt === undefined || val("starts_at") !== dateInput(existingStartsAt)))
+    throw new ValidationError("Подію можна запланувати не більше ніж на два роки вперед.");
   if (!Number.isInteger(capacity) || capacity < 1 || capacity > 10000)
     throw new ValidationError("Кількість місць має бути від 1 до 10 000.");
   if ((visibility !== "public" && visibility !== "private") || !categories.some((c) => c === category))
@@ -189,9 +196,28 @@ export async function processCover(file: FormDataEntryValue | null) {
     throw new ValidationError("Завантажте коректний JPEG, PNG або WebP до 24 мегапікселів.");
   }
 }
-export function saveEvent(id: string | undefined, who: Actor, event: EventFields, cover: Buffer | null) {
+function keyFor(key: string, payload: unknown) {
+  try { return idempotencyKey(key, payload); }
+  catch (error) {
+    if (error instanceof Error && error.message === "INVALID_IDEMPOTENCY_KEY")
+      throw new ValidationError("Некоректний ключ повторного запиту.");
+    throw error;
+  }
+}
+function existingResult(userId: string, operation: string, entry: ReturnType<typeof idempotencyKey>) {
+  try { return previousResult(userId, operation, entry); }
+  catch (error) {
+    if (error instanceof Error && error.message === "IDEMPOTENCY_CONFLICT")
+      throw new ValidationError("Цей запит уже використано з іншими даними. Оновіть сторінку.");
+    throw error;
+  }
+}
+export function saveEvent(id: string | undefined, who: Actor, event: EventFields, cover: Buffer | null, key = "") {
   return db()
     .transaction(() => {
+      const entry = !id ? keyFor(key, { event, cover: cover?.toString("base64") }) : null;
+      const previousResult = existingResult(who.id, "event", entry);
+      if (previousResult) return previousResult;
       const eventId = id || randomUUID();
       const previous = id ? hostEvent(id, who) : null;
       if (!id && !cover) throw new ValidationError("Додайте обкладинку події.");
@@ -210,6 +236,7 @@ export function saveEvent(id: string | undefined, who: Actor, event: EventFields
       if (previous && previous.visibility !== event.visibility)
         db().prepare("DELETE FROM grants WHERE event_id=?").run(eventId);
       if (cover) db().prepare("INSERT OR REPLACE INTO event_covers VALUES (?, ?)").run(eventId, cover);
+      saveResult(who.id, "event", entry, eventId);
       return eventId;
     })
     .immediate();
@@ -218,20 +245,52 @@ export function deleteEvent(id: string, who: Actor) {
   hostEvent(id, who);
   db().prepare("DELETE FROM events WHERE id=? AND host_id=?").run(id, who.id);
 }
-export function addComment(id: string, who: Actor, body: string) {
+export function addComment(id: string, who: Actor, body: string, key = "") {
   return db()
     .transaction(() => {
       visibleEvent(id, who);
       if (!body.trim() || body.trim().length > 1500)
         throw new ValidationError("Напишіть від 1 до 1500 символів.");
+      const entry = keyFor(key, { eventId: id, body: body.trim() });
+      const previousResult = existingResult(who.id, "comment", entry);
+      if (previousResult) return Number(previousResult);
+      const now = Date.now();
+      db().prepare("DELETE FROM comment_posts WHERE created_at <= ?").run(now - 60000);
       const count = db()
-        .prepare("SELECT COUNT(*) AS n FROM comments WHERE user_id=? AND created_at>?")
-        .get(who.id, Date.now() - 60000) as { n: number };
+        .prepare("SELECT COUNT(*) AS n FROM comment_posts WHERE user_id=? AND created_at>?")
+        .get(who.id, now - 60000) as { n: number };
       if (count.n >= 5) throw new ValidationError("Зачекайте хвилину перед наступним коментарем.");
       const saved = db()
         .prepare("INSERT INTO comments(event_id,user_id,body,created_at) VALUES (?,?,?,?)")
-        .run(id, who.id, body.trim(), Date.now());
+        .run(id, who.id, body.trim(), now);
+      db().prepare("INSERT INTO comment_posts(user_id, created_at) VALUES (?, ?)").run(who.id, now);
+      saveResult(who.id, "comment", entry, String(saved.lastInsertRowid));
       return Number(saved.lastInsertRowid);
     })
     .immediate();
+}
+
+export function deleteComment(eventId: string, who: Actor, commentId: number) {
+  db().transaction(() => {
+    const event = visibleEvent(eventId, who);
+    const comment = db().prepare("SELECT user_id FROM comments WHERE id = ? AND event_id = ?").get(commentId, eventId) as { user_id: string | null } | undefined;
+    if (!comment) throw unavailable();
+    if (event.host_id !== who.id && comment.user_id !== who.id) throw new Response("Доступ обмежено.", { status: 403 });
+    db().prepare("DELETE FROM comments WHERE id = ? AND event_id = ?").run(commentId, eventId);
+  }).immediate();
+}
+
+export function reportComment(eventId: string, who: Actor, commentId: number) {
+  db().transaction(() => {
+    visibleEvent(eventId, who);
+    if (!db().prepare("SELECT 1 FROM comments WHERE id = ? AND event_id = ?").get(commentId, eventId)) throw unavailable();
+    db().prepare("INSERT OR IGNORE INTO comment_reports(comment_id, reporter_id, created_at) VALUES (?, ?, ?)").run(commentId, who.id, Date.now());
+  }).immediate();
+}
+
+export function dismissCommentReports(eventId: string, who: Actor, commentId: number) {
+  db().transaction(() => {
+    hostEvent(eventId, who);
+    db().prepare("DELETE FROM comment_reports WHERE comment_id = ? AND comment_id IN (SELECT id FROM comments WHERE event_id = ?)").run(commentId, eventId);
+  }).immediate();
 }

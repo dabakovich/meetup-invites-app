@@ -295,3 +295,96 @@ test("discovery and comment pages return bounded rows and link to the next page"
   assert.ok(earlier.includes("Коментар №1."));
   assert.ok(!earlier.includes("Коментар №21."));
 });
+
+test("replayed keyed event and comment submissions produce one result, and reject conflicting reuse", async () => {
+  const host = await signup("idempotency-host");
+  const first = eventForm("public", "Ідемпотентна подія", 10);
+  first.set("idempotency_key", "event-request-123");
+  const saved = await call("/events/new", host, first);
+  assert.equal(saved.status, 303);
+  const replay = await call("/events/new", host, first);
+  assert.equal(replay.status, 303);
+  assert.equal(replay.headers.get("Location"), saved.headers.get("Location"));
+  const conflicting = eventForm("public", "Інша подія", 10);
+  conflicting.set("idempotency_key", "event-request-123");
+  assert.equal((await call("/events/new", host, conflicting)).status, 400);
+  const path = saved.headers.get("Location")!;
+  const request = { comment: "Привіт", idempotency_key: "comment-request-123" };
+  assert.equal((await postIntent(path, host, "comment", request)).status, 303);
+  assert.equal((await postIntent(path, host, "comment", request)).status, 303);
+  assert.equal((await postIntent(path, host, "comment", { ...request, comment: "Інший" })).status, 400);
+  const eventId = path.split("/").pop();
+  assert.equal((db().prepare("SELECT COUNT(*) n FROM comments WHERE event_id=?").get(eventId) as {n: number}).n, 1);
+});
+
+test("events more than two years away are rejected server-side", async () => {
+  const host = await signup("date-limit-host");
+  const form = eventForm("public", "Занадто далека подія");
+  form.set("starts_at", "9999-01-01T12:00");
+  assert.equal((await call("/events/new", host, form)).status, 400);
+  assert.equal((db().prepare("SELECT COUNT(*) n FROM events WHERE title=?").get("Занадто далека подія") as {n: number}).n, 0);
+  const html = await (await call("/events/new", host)).text();
+  assert.match(html, /type="datetime-local"[^>]*max="\d{4}-\d{2}-\d{2}T\d{2}:\d{2}"/);
+});
+
+test("profile updates are scoped to the signed-in user and deletion removes personal data", async () => {
+  const host = await signup("privacy-host");
+  const guest = await signup("privacy-guest");
+  const event = await call("/events/new", host, eventForm("public", "Privacy host event", 3));
+  const path = event.headers.get("Location")!;
+  const own = await call("/events/new", guest, eventForm("public", "Privacy guest event", 3));
+  const ownPath = own.headers.get("Location")!;
+  const id = path.split("/").pop()!;
+  const guestId = (db().prepare("SELECT id FROM user WHERE email=?").get("privacy-guest@example.test") as { id: string }).id;
+  await postIntent(path, guest, "join");
+  assert.equal((await postIntent(path, guest, "comment", { comment: "До зустрічі" })).status, 303);
+  assert.equal((await call("/profile", guest, new URLSearchParams({ intent: "rename", name: "Нове ім’я", userId: "other" }))).status, 303);
+  assert.equal((db().prepare("SELECT name FROM user WHERE id=?").get(guestId) as { name: string }).name, "Нове ім’я");
+  assert.equal((await call("/profile", guest, new URLSearchParams({ intent: "rename", name: " " }))).status, 400);
+  assert.equal((await call("/profile", guest, new URLSearchParams({ intent: "delete" }))).status, 400);
+  assert.ok([400, 403].includes((await call("/profile", guest, new URLSearchParams({ intent: "delete", confirm: "yes" }), "https://evil.test")).status));
+  assert.equal((await call("/profile", guest, new URLSearchParams({ intent: "delete", confirm: "yes" }))).status, 303);
+  assert.equal(db().prepare("SELECT id FROM user WHERE id=?").get(guestId), undefined);
+  assert.equal(db().prepare("SELECT id FROM session WHERE userId=?").get(guestId), undefined);
+  assert.equal(db().prepare("SELECT user_id FROM rsvps WHERE user_id=?").get(guestId), undefined);
+  assert.equal((await call(ownPath, host)).status, 404);
+  const comment = db().prepare("SELECT user_id, body FROM comments WHERE event_id=?").get(id) as { user_id: string | null; body: string };
+  assert.equal(comment.user_id, null);
+  assert.equal(comment.body, "До зустрічі");
+  const html = await (await call(path, host)).text();
+  assert.ok(html.includes("До зустрічі"));
+  assert.equal((await call("/profile", guest)).status, 302);
+});
+
+test("comment reporting and moderation enforce event host and author permissions", async () => {
+  const host = await signup("moderation-host");
+  const author = await signup("moderation-author");
+  const visitor = await signup("moderation-visitor");
+  const event = await call("/events/new", host, eventForm("public", "Moderation test", 5));
+  const path = event.headers.get("Location")!;
+  const eventId = path.split("/").pop()!;
+  assert.equal((await postIntent(path, author, "comment", { comment: "Коментар для скарги" })).status, 303);
+  const commentId = String((db().prepare("SELECT id FROM comments WHERE event_id=? AND body=?").get(eventId, "Коментар для скарги") as { id: number }).id);
+  const fields = { comment_id: commentId };
+  const reported = await postIntent(path + "?page=2", visitor, "report-comment", fields);
+  assert.equal(reported.status, 303);
+  assert.equal(reported.headers.get("Location"), path + "?reported=1&page=2#comments");
+  assert.equal((await postIntent(path, visitor, "report-comment", fields)).status, 303);
+  const reports = () => (db().prepare("SELECT COUNT(*) n FROM comment_reports WHERE comment_id=?").get(commentId) as { n: number }).n;
+  assert.equal(reports(), 1);
+  assert.equal((await postIntent(path, visitor, "dismiss-reports", fields)).status, 403);
+  assert.equal((await postIntent(path, visitor, "delete-comment", fields)).status, 403);
+  assert.equal(reports(), 1);
+  const hostPage = await (await call(path, host)).text();
+  assert.ok(hostPage.includes("Коментар для скарги"));
+  assert.equal((await postIntent(path, host, "dismiss-reports", fields)).status, 303);
+  assert.equal(reports(), 0);
+  assert.equal((await postIntent(path, visitor, "report-comment", fields)).status, 303);
+  assert.equal((await postIntent(path, host, "delete-comment", fields)).status, 303);
+  assert.equal(reports(), 0);
+  assert.equal(db().prepare("SELECT id FROM comments WHERE id=?").get(commentId), undefined);
+  assert.equal((await postIntent(path, author, "comment", { comment: "Власний коментар" })).status, 303);
+  const ownId = String((db().prepare("SELECT id FROM comments WHERE event_id=? AND body=?").get(eventId, "Власний коментар") as { id: number }).id);
+  assert.equal((await postIntent(path, author, "delete-comment", { comment_id: ownId })).status, 303);
+  assert.equal(db().prepare("SELECT id FROM comments WHERE id=?").get(ownId), undefined);
+});

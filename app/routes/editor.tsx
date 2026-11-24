@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { useEffect, useState } from "react";
 import {
   data,
@@ -13,19 +14,19 @@ import {
 import { ArrowLeft, ImagePlus, Save } from "lucide-react";
 import { requireActor, readForm } from "../server/auth.server";
 import { fields, hostEvent, processCover, saveEvent, ValidationError } from "../server/events.server";
-import { categories, dateInput } from "../model";
+import { categories, dateInput, latestEventDate } from "../model";
 export async function loader({ request, params }: LoaderFunctionArgs) {
   const who = await requireActor(request);
-  return { event: params.id ? hostEvent(params.id, who) : null };
+  return { event: params.id ? hostEvent(params.id, who) : null, requestKey: randomUUID(), latestDate: latestEventDate() };
 }
 export async function action({ request, params }: ActionFunctionArgs) {
   const who = await requireActor(request);
-  if (params.id) hostEvent(params.id, who);
+  const existing = params.id ? hostEvent(params.id, who) : null;
   const form = await readForm(request, 5 * 1024 * 1024 + 32_768);
   try {
-    const values = fields(form);
+    const values = fields(form, existing?.starts_at);
     const cover = await processCover(form.get("cover"));
-    const id = saveEvent(params.id, who, values, cover);
+    const id = saveEvent(params.id, who, values, cover, String(form.get("idempotency_key") || request.headers.get("Idempotency-Key") || ""));
     return redirect("/events/" + id, { status: 303 });
   } catch (e) {
     if (e instanceof ValidationError) return data({ error: e.message }, { status: 400 });
@@ -33,7 +34,7 @@ export async function action({ request, params }: ActionFunctionArgs) {
   }
 }
 export default function Editor() {
-  const { event } = useLoaderData<typeof loader>();
+  const { event, requestKey, latestDate } = useLoaderData<typeof loader>();
   const result = useActionData<typeof action>(),
     busy = useNavigation().state === "submitting";
   const [file, setFile] = useState<File | null>(null),
@@ -60,6 +61,7 @@ export default function Editor() {
         className="panel stack editor"
         key={event?.id ?? "new"}
       >
+        {!event && <input type="hidden" name="idempotency_key" value={requestKey} />}
         <label>
           Назва події
           <input
@@ -87,6 +89,7 @@ export default function Editor() {
             <input
               type="datetime-local"
               name="starts_at"
+              max={event && dateInput(event.starts_at) > latestDate ? dateInput(event.starts_at) : latestDate}
               required
               defaultValue={event ? dateInput(event.starts_at) : ""}
             />

@@ -134,6 +134,7 @@ export default function Root() {
         <div className="footer-wrap">
           <Brand />
           <span>Українська спільнота подій</span>
+          <Link to="/rules">Правила спільноти</Link>
         </div>
       </footer>
     </>

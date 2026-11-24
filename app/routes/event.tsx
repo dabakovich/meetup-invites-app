@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { randomUUID } from "node:crypto";
 import {
   Link,
   Form,
@@ -31,6 +32,9 @@ import {
 import { actor, requireActor, appOrigin, readForm } from "../server/auth.server";
 import {
   addComment,
+  deleteComment,
+  reportComment,
+  dismissCommentReports,
   deleteEvent,
   details,
   rotateInvite,
@@ -45,6 +49,8 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
     page = details(params.id!, who, new URL(request.url).searchParams.get("page"));
   return {
     ...page,
+    commentKey: randomUUID(),
+    reported: new URL(request.url).searchParams.get("reported") === "1",
     closedAtLoad: page.event.starts_at <= Date.now(),
     signedIn: !!who,
     inviteURL: page.token ? appOrigin + "/invite/" + page.token : null,
@@ -70,10 +76,24 @@ export async function action({ request, params }: ActionFunctionArgs) {
         }
         break;
       case "comment": {
-        const commentId = addComment(id, who, String(form.get("comment") || ""));
+        const commentId = addComment(id, who, String(form.get("comment") || ""), String(form.get("idempotency_key") || request.headers.get("Idempotency-Key") || ""));
         if (form.get("inline") === "yes") return data({ intent, commentId, error: null });
         break;
       }
+      case "delete-comment":
+        deleteComment(id, who, Number(form.get("comment_id")));
+        break;
+      case "report-comment":
+        reportComment(id, who, Number(form.get("comment_id")));
+        {
+          const currentPage = new URL(request.url).searchParams.get("page");
+          const params = new URLSearchParams({ reported: "1" });
+          if (currentPage && /^[1-9]\d*$/.test(currentPage)) params.set("page", currentPage);
+          return redirect(`/events/${id}?${params}#comments`, 303);
+        }
+      case "dismiss-reports":
+        dismissCommentReports(id, who, Number(form.get("comment_id")));
+        break;
       case "rotate":
         rotateInvite(id, who);
         break;
@@ -131,7 +151,7 @@ function FormError({ message }: { message?: string | null }) {
 }
 
 export default function EventPage() {
-  const { event, host, organizer, joined, comments, commentPage, guests, inviteURL, signedIn, closedAtLoad } =
+  const { event, host, organizer, joined, comments, commentPage, guests, reportedComments, inviteURL, signedIn, closedAtLoad, commentKey, reported } =
     useLoaderData<typeof loader>();
   const result = useActionData<typeof action>(),
     busy = useNavigation().state === "submitting";
@@ -141,12 +161,15 @@ export default function EventPage() {
     signIn = "/auth?next=/events/" + event.id;
   const closed = useBookingClosed(event.starts_at, closedAtLoad);
   const commentFetcher = useFetcher<typeof action>();
+  const [submissionKey, setSubmissionKey] = useState(commentKey);
   const draft = useRef<HTMLTextAreaElement>(null);
   const submittedText = useRef("");
-  const postedId = commentFetcher.data?.commentId;
   useEffect(() => {
-    if (postedId && draft.current?.value === submittedText.current) draft.current.value = "";
-  }, [postedId]);
+    if (commentFetcher.data?.commentId) {
+      if (draft.current?.value === submittedText.current) draft.current.value = "";
+      setSubmissionKey(crypto.randomUUID());
+    }
+  }, [commentFetcher.data]);
   function errorFor(intent: string) {
     return result?.intent === intent ? result.error : null;
   }
@@ -211,12 +234,28 @@ export default function EventPage() {
             <h2>
               Коментарі <span className="count">{commentPage.total}</span>
             </h2>
+            {reported && <p role="status">Скаргу надіслано організатору події.</p>}
             {comments.length ? (
               comments.map((c) => (
                 <div className="comment" key={c.id}>
                   <strong>{c.name}</strong>
                   <small>{dateParts(c.created_at).date}</small>
                   <p className="prewrap">{c.body}</p>
+                  {host && c.reports > 0 && <p role="status">Скарг: {c.reports}</p>}
+                  {signedIn && <div className="comment-actions">
+                    {(host || !!c.own) && <Form method="post">
+                      <input type="hidden" name="comment_id" value={c.id} />
+                      <button className="text-link danger-text" name="intent" value="delete-comment" disabled={busy}>Видалити коментар</button>
+                    </Form>}
+                    {!c.own && !host && <Form method="post">
+                      <input type="hidden" name="comment_id" value={c.id} />
+                      <button className="text-link" name="intent" value="report-comment" disabled={busy}>Поскаржитися</button>
+                    </Form>}
+                    {host && c.reports > 0 && <Form method="post">
+                      <input type="hidden" name="comment_id" value={c.id} />
+                      <button className="text-link" name="intent" value="dismiss-reports" disabled={busy}>Відхилити скарги</button>
+                    </Form>}
+                  </div>}
                 </div>
               ))
             ) : (
@@ -237,6 +276,7 @@ export default function EventPage() {
                 }}
               >
                 <input type="hidden" name="intent" value="comment" />
+                <input type="hidden" name="idempotency_key" value={submissionKey} />
                 <label className="sr-only" htmlFor="comment">
                   Ваш коментар
                 </label>
@@ -261,6 +301,20 @@ export default function EventPage() {
               </Link>
             )}
           </section>
+          {host && reportedComments.length > 0 && (
+            <section className="panel detail-panel">
+              <h2>Скарги на коментарі</h2>
+              {reportedComments.length === 50 && <p className="muted">Показано 50 останніх скарг. Після розгляду з’являться наступні.</p>}
+              {reportedComments.map((c) => <div className="comment" key={c.id}>
+                <p className="prewrap">{c.body}</p>
+                <p>Скарг: {c.reports}</p>
+                <div className="comment-actions">
+                  <Form method="post"><input type="hidden" name="comment_id" value={c.id} /><button className="text-link danger-text" name="intent" value="delete-comment" disabled={busy}>Видалити коментар</button></Form>
+                  <Form method="post"><input type="hidden" name="comment_id" value={c.id} /><button className="text-link" name="intent" value="dismiss-reports" disabled={busy}>Відхилити скарги</button></Form>
+                </div>
+              </div>)}
+            </section>
+          )}
           {host && (
             <section className="panel detail-panel">
               <h2>

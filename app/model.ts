@@ -29,6 +29,16 @@ export function dateInput(timestamp: number) {
   });
   return parts.format(timestamp).replace(" ", "T");
 }
+// The latest permitted local minute, two calendar years from now in Kyiv.
+export function latestEventDate(now = Date.now()) {
+  const local = dateInput(now);
+  const year = Number(local.slice(0, 4)) + 2;
+  let suffix = local.slice(4);
+  // February 29 in a non-leap target year becomes February 28.
+  if (suffix.startsWith("-02-29") && new Date(Date.UTC(year, 1, 29)).getUTCMonth() !== 1)
+    suffix = "-02-28" + suffix.slice(6);
+  return String(year).padStart(4, "0") + suffix;
+}
 export function parseKyivDate(value: string) {
   if (!/^\d{4}-\d\d-\d\dT\d\d:\d\d$/.test(value)) return NaN;
   const naive = Date.parse(value + ":00Z");
