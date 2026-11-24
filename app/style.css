@@ -647,7 +647,7 @@ footer {
   font-weight: 650;
   display: block;
 }
-.stack input:not([type="radio"]):not([type="file"]):not([type="hidden"]),
+.stack input:not([type="radio"]):not([type="checkbox"]):not([type="file"]):not([type="hidden"]),
 .stack textarea,
 .stack select,
 .host-actions > input {
@@ -886,6 +886,9 @@ footer {
 .danger {
   background: #a03b50;
   color: #fff;
+}
+.danger:hover {
+  background: #862e42;
 }
 .guests {
   list-style: none;
@@ -1219,4 +1222,49 @@ footer {
 .booking p.form-error {
   grid-column: 1 / -1;
   grid-row: auto;
+}
+
+.profile-settings {
+  margin-top: 26px;
+  padding: 24px;
+}
+.profile-settings h2 {
+  font-size: 21px;
+  letter-spacing: -0.7px;
+  margin-bottom: 20px;
+}
+.profile-settings > .stack {
+  max-width: 520px;
+}
+.profile-settings .btn {
+  justify-self: start;
+}
+.profile-delete {
+  margin-top: 24px;
+  padding-top: 22px;
+}
+.profile-delete h3 {
+  font-size: 17px;
+  margin-bottom: 8px;
+}
+.profile-delete p {
+  max-width: 760px;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.6;
+}
+.profile-delete .stack {
+  margin-top: 16px;
+}
+.profile-settings label.profile-confirm {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.profile-settings .profile-confirm input {
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  flex: none;
+  accent-color: var(--accent);
 }

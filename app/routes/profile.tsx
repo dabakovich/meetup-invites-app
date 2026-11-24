@@ -55,7 +55,7 @@ export default function Profile() {
           </button>
         </Form>
       </div>
-      <section className="panel">
+      <section className="panel profile-settings">
         <h2>Налаштування акаунта</h2>
         {result?.error && <p className="form-error" role="alert">{result.error}</p>}
         <Form method="post" className="stack">
@@ -63,13 +63,15 @@ export default function Profile() {
           <label>Ваше ім’я<input name="name" defaultValue={name} maxLength={80} required /></label>
           <button className="btn secondary">Зберегти ім’я</button>
         </Form>
-        <h3>Видалити акаунт</h3>
-        <p>Буде видалено ваш акаунт, сеанси, бронювання та створені вами події. Ваші коментарі в інших подіях залишаться без імені. Цю дію неможливо скасувати.</p>
-        <Form method="post" className="stack">
-          <input type="hidden" name="intent" value="delete" />
-          <label><input type="checkbox" name="confirm" value="yes" required /> Підтверджую видалення акаунта</label>
-          <button className="btn secondary">Видалити акаунт</button>
-        </Form>
+        <div className="profile-delete danger-zone">
+          <h3>Видалити акаунт</h3>
+          <p>Буде видалено ваш акаунт, сеанси, бронювання та створені вами події. Ваші коментарі в інших подіях залишаться без імені. Цю дію неможливо скасувати.</p>
+          <Form method="post" className="stack">
+            <input type="hidden" name="intent" value="delete" />
+            <label className="profile-confirm"><input type="checkbox" name="confirm" value="yes" required /> Підтверджую видалення акаунта</label>
+            <button className="btn danger">Видалити акаунт</button>
+          </Form>
+        </div>
       </section>
       <section className="profile-group">
         <h2>Створені мною</h2>
