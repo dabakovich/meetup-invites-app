@@ -41,14 +41,42 @@ Open [localhost:3000](http://localhost:3000). Keep the same secret across restar
 | `BETTER_AUTH_URL` | Public origin. Required for production. Development defaults to `http://localhost:5173`. |
 | `BETTER_AUTH_SECRET` | Secret of at least 32 characters. Required for production. Development generates and persists a local secret in SQLite. |
 | `DATABASE_PATH` | SQLite file, default `data/tusovka.sqlite`. Use a persistent local disk. |
-| `PRIVACY_CONTROLLER`, `PRIVACY_CONTACT` | Set the actual data controller name and contact for the registration privacy notice. |
+| `PRIVACY_CONTROLLER`, `PRIVACY_CONTACT` | The data controller’s name and contact information for the registration privacy notice. Set both for a public deployment. |
 | `PORT`, `HOST` | Production listener, default `127.0.0.1:3000`. |
 | `SEED_CATALOG` | Set to `0` to skip the optional starter catalog. Production starts without seeding. |
-| `PRIVACY_CONTROLLER`, `PRIVACY_CONTACT` | The actual data controller's name and contact information, displayed in the registration privacy notice. Set both for a public deployment. |
 
 Run one Node instance behind a TLS-terminating reverse proxy on the same host. Preserve the public Host header and have the proxy overwrite X-Forwarded-For, X-Forwarded-Host and X-Forwarded-Proto with values derived from the connection. Omit invite URLs from access logs. HTTPS enables Secure cookies. The application uses HttpOnly session cookies, same-origin mutation checks, seven-day sessions, persistent per-client and per-email sign-in throttling, and per-account comment limits.
 
 SQLite uses WAL, foreign keys and a busy timeout. Back up using SQLite’s online backup API or the CLI `.backup` command. Keep the database, backups and auth secret private. Uploaded JPEG, PNG and WebP images are limited to 5 MiB and 24 megapixels, decoded and re-encoded as WebP before storage. The cover endpoint applies the same visibility check as the event page.
+
+### Deploy with Docker Compose
+
+Use a Linux host with Docker Engine and the Docker Compose plugin. Set `BETTER_AUTH_URL` to your public HTTPS origin and `BETTER_AUTH_SECRET` to a stable secret generated with `openssl rand -hex 32`. Set `PRIVACY_CONTROLLER` and `PRIVACY_CONTACT` for a public deployment. Put these values in a private `.env` file.
+
+To start from a checkout on the host, run `docker compose up --detach --build --wait` from the repository root. Point your DNS record to the host and configure a TLS-terminating reverse proxy on the same host. The app listens on `127.0.0.1:3100` by default. Set `APP_PORT` in `.env` to use a different port and update the proxy accordingly.
+
+For example, use this site block with Caddy, replacing `meetups.example.com` with your hostname.
+
+```caddyfile
+meetups.example.com {
+    reverse_proxy 127.0.0.1:3100
+}
+```
+
+The `meetup-invites_data` Docker volume persists the SQLite database between deployments.
+
+### Deploy with GitHub Actions
+
+The included workflow deploys pushes to `release` over SSH. Add these secrets to the `release` GitHub environment or to the repository’s Actions secrets. Create the private `.env` on the deployment host at `VPS_PATH/.env` before the first push.
+
+| Secret | Value |
+| --- | --- |
+| `VPS_HOST` | Public IP or DNS name of the SSH server. |
+| `VPS_USER` | SSH account with write access to `VPS_PATH` and permission to run Docker. |
+| `VPS_PORT` | SSH port. The workflow defaults to `22`. |
+| `VPS_PATH` | Absolute path to the deployment directory on the host. |
+| `VPS_KNOWN_HOSTS` | Verified OpenSSH `known_hosts` entry for `VPS_HOST`. Use `[host]:port` for a non-default port. |
+| `VPS_SSH_KEY` | Private key for the deployment account, with the public key installed in its `authorized_keys`. |
 
 ## Verification
 

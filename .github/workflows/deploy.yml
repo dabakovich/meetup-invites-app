@@ -1,0 +1,74 @@
+name: Deploy to VPS
+
+on:
+  push:
+    branches: [release]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: meetup-invites-vps
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: release
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Build and start the app on the VPS
+        shell: bash
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_PORT: ${{ secrets.VPS_PORT }}
+          VPS_PATH: ${{ secrets.VPS_PATH }}
+          VPS_KNOWN_HOSTS: ${{ secrets.VPS_KNOWN_HOSTS }}
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+        run: |
+          : "${VPS_HOST:?Missing VPS_HOST}" "${VPS_USER:?Missing VPS_USER}" "${VPS_PATH:?Missing VPS_PATH}"
+          : "${VPS_KNOWN_HOSTS:?Missing VPS_KNOWN_HOSTS}" "${VPS_SSH_KEY:?Missing VPS_SSH_KEY}"
+          umask 077
+          ssh_dir=$(mktemp -d)
+          trap 'rm -rf -- "$ssh_dir"' EXIT
+          printf '%s\n' "$VPS_SSH_KEY" > "$ssh_dir/key"
+          printf '%s\n' "$VPS_KNOWN_HOSTS" > "$ssh_dir/known_hosts"
+
+          remote_script=$(cat <<'DEPLOY'
+          set -eu
+          deploy_path=$1
+          if [[ "$deploy_path" != /* ]]; then
+            echo 'VPS_PATH must be an absolute path.' >&2
+            exit 1
+          fi
+          if [ ! -s "$deploy_path/.env" ]; then
+            echo 'Create VPS_PATH/.env before deploying.' >&2
+            exit 1
+          fi
+          source_dir=$(mktemp -d "$deploy_path/.deploy.XXXXXXXX")
+          trap 'rm -rf -- "$source_dir"' EXIT
+          tar -xzf - -C "$source_dir"
+          cd "$source_dir"
+          docker compose --env-file "$deploy_path/.env" up --detach --build --wait --wait-timeout 90
+          DEPLOY
+          )
+
+          # Quote each argument for the remote login shell, including paths with spaces.
+          shell_quote() {
+            local escaped_apostrophe="'\\''"
+            printf "'%s'" "${1//\'/$escaped_apostrophe}"
+          }
+          remote_command="bash -c $(shell_quote "$remote_script") -- $(shell_quote "$VPS_PATH")"
+
+          git archive --format=tar.gz HEAD -- .dockerignore Dockerfile compose.yaml \
+            package.json package-lock.json react-router.config.ts tsconfig.json vite.config.ts \
+            app public migrations scripts/serve.mjs |
+            ssh -T -F /dev/null -o BatchMode=yes -o ConnectTimeout=15 -o IdentitiesOnly=yes \
+              -o StrictHostKeyChecking=yes -o GlobalKnownHostsFile=/dev/null \
+              -o UserKnownHostsFile="$ssh_dir/known_hosts" -i "$ssh_dir/key" \
+              -p "${VPS_PORT:-22}" -l "$VPS_USER" -- "$VPS_HOST" "$remote_command"

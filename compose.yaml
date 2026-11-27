@@ -1,0 +1,27 @@
+name: meetup-invites
+
+services:
+  app:
+    build: .
+    restart: unless-stopped
+    # Keep the host reverse proxy on loopback, which the app already trusts.
+    network_mode: host
+    environment:
+      HOST: 127.0.0.1
+      PORT: ${APP_PORT:-3100}
+      BETTER_AUTH_URL: ${BETTER_AUTH_URL:-https://meetups.tada.wtf}
+      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?Set BETTER_AUTH_SECRET in the VPS .env file}
+      PRIVACY_CONTROLLER: ${PRIVACY_CONTROLLER:-}
+      PRIVACY_CONTACT: ${PRIVACY_CONTACT:-}
+      DATABASE_PATH: /app/data/tusovka.sqlite
+    volumes:
+      - data:/app/data
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:' + process.env.PORT).then(r => { if (!r.ok) process.exitCode = 1 }).catch(() => { process.exitCode = 1 })"]
+      interval: 5s
+      timeout: 3s
+      retries: 6
+      start_period: 10s
+
+volumes:
+  data:
