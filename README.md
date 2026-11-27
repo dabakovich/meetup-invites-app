@@ -53,21 +53,15 @@ SQLite uses WAL, foreign keys and a busy timeout. Back up using SQLite’s onlin
 
 Use a Linux host with Docker Engine and the Docker Compose plugin. Set `BETTER_AUTH_URL` to your public HTTPS origin and `BETTER_AUTH_SECRET` to a stable secret generated with `openssl rand -hex 32`. Set `PRIVACY_CONTROLLER` and `PRIVACY_CONTACT` for a public deployment. Put these values in a private `.env` file.
 
-To start from a checkout on the host, run `docker compose up --detach --build --wait` from the repository root. Point your DNS record to the host and configure a TLS-terminating reverse proxy on the same host. The app listens on `127.0.0.1:3100` by default. Set `APP_PORT` in `.env` to use a different port and update the proxy accordingly.
+The VPS runs one system Caddy service for all sites. Its route for `meetups.tada.wtf` forwards to `127.0.0.1:3001`. The app shares the Linux host network and listens only on loopback, which Express trusts for proxy headers. Compose sets port 3001 even if an older server `.env` still contains `APP_PORT=3100`. Set `BETTER_AUTH_URL=https://meetups.tada.wtf` and retain the existing auth secret.
 
-For example, use this site block with Caddy, replacing `meetups.example.com` with your hostname.
+For a manual deployment from a **full checkout**, run `docker compose up --detach --build --wait`. To check the local route on the VPS, run `curl -fsS -o /dev/null http://127.0.0.1:3001/`. The Actions deployment directory only needs its persistent `.env` because the workflow builds from a temporary source directory.
 
-```caddyfile
-meetups.example.com {
-    reverse_proxy 127.0.0.1:3100
-}
-```
-
-The `meetup-invites_data` Docker volume persists the SQLite database between deployments.
+The [shared Caddy configuration](https://github.com/dabakovich/gender-party-invites/blob/release/deploy/Caddyfile) and [two-site cutover procedure](https://github.com/dabakovich/gender-party-invites/blob/release/deploy/VPS.md) live in the gender-party repository. The `meetup-invites_data` Docker volume persists the SQLite database between deployments.
 
 ### Deploy with GitHub Actions
 
-The included workflow deploys pushes to `release` over SSH. Add these secrets to the `release` GitHub environment or to the repository’s Actions secrets. Create the private `.env` on the deployment host at `VPS_PATH/.env` before the first push.
+The included workflow deploys pushes to `production` over SSH, waits for the app health check, and checks the public origin through Caddy. Install `curl` on the VPS. Add these secrets to the `production` GitHub environment or to the repository’s Actions secrets. Create the private `.env` on the deployment host at `VPS_PATH/.env` before the first push.
 
 | Secret | Value |
 | --- | --- |

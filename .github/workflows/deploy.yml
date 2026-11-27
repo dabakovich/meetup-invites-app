@@ -55,6 +55,12 @@ jobs:
           tar -xzf - -C "$source_dir"
           cd "$source_dir"
           docker compose --env-file "$deploy_path/.env" up --detach --build --wait --wait-timeout 90
+          public_origin=$(docker compose --env-file "$deploy_path/.env" exec -T app printenv BETTER_AUTH_URL)
+          test "${public_origin%/}" = https://meetups.tada.wtf
+          status=$(curl --fail --silent --show-error --retry 5 --retry-connrefused \
+            --connect-timeout 5 --max-time 15 --output /dev/null --write-out '%{http_code}' \
+            https://meetups.tada.wtf/)
+          test "$status" = 200
           DEPLOY
           )
 
